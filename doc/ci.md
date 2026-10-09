@@ -1,5 +1,9 @@
 # Add Runalong to CI
 
+**Add performance evidence to the pipeline without adding a recorder to the app.** Install Runalong on the CI host and wrap the existing automation command. App dependencies and test source stay unchanged; the app's launch configuration must still provide a reachable VM Service for a profile build.
+
+Teams can pin and upgrade the reporting tool independently across projects. Aggregation, HTML generation, baseline comparisons, and MCP processing happen on the host, and records already written there can survive a target-app crash. Service communication still has overhead; validate it for your workload. Read [why the recorder is external](architecture.md#why-the-recorder-is-external).
+
 Start by collecting reports alongside the existing test command. Keep performance gates disabled while verifying endpoint discovery, frame fidelity, coverage, and repeatability.
 
 ```sh

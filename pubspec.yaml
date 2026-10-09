@@ -1,5 +1,5 @@
 name: runalong
-description: Record Flutter rendering performance alongside existing UI automation, with offline reports, CI budgets, and local MCP tools.
+description: Record Flutter rendering performance alongside existing UI tests, without an app dependency. Offline reports, CI budgets, and local MCP tools.
 version: 0.1.0
 repository: https://github.com/devmithunnath/runalong
 issue_tracker: https://github.com/devmithunnath/runalong/issues
@@ -9,6 +9,8 @@ executables:
   runalong: runalong
   ral: ral
 dependencies:
+  analyzer: ^14.5.0
+  crypto: ^3.0.7
   args: ^2.7.0
   dart_mcp: ^0.5.2
   path: ^1.9.1

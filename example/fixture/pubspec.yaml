@@ -5,6 +5,8 @@ version: 1.0.0+1
 environment:
   sdk: ^3.11.0
 dependencies:
+  runalong_context:
+    path: ../../packages/runalong_context
   flutter:
     sdk: flutter
 dev_dependencies:

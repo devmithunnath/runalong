@@ -1,4 +1,6 @@
 import 'dart:ui';
+import 'dart:convert';
+import 'dart:developer' as developer;
 import 'package:flutter/scheduler.dart';
 
 /// Independent validation instrumentation, confined to this fixture app.
@@ -9,6 +11,11 @@ abstract final class FixtureFrameReference {
   static void install() {
     if (_installed) return;
     _installed = true;
+    developer.registerExtension('ext.fixture.reference', (_, _) async {
+      return developer.ServiceExtensionResponse.result(
+        jsonEncode({'frames': frames}),
+      );
+    });
     SchedulerBinding.instance.addTimingsCallback((timings) {
       for (final frame in timings) {
         frames.add({
@@ -21,6 +28,7 @@ abstract final class FixtureFrameReference {
           'elapsedMicros': frame.totalSpan.inMicroseconds,
           'vsyncOverheadMicros': frame.vsyncOverhead.inMicroseconds,
         });
+        if (frames.length > 10000) frames.removeAt(0);
       }
     });
   }

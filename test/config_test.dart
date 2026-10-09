@@ -1,10 +1,44 @@
 import 'dart:io';
+import 'package:path/path.dart' as p;
 
 import 'package:runalong/src/config.dart';
 import 'package:runalong/src/run_service.dart';
 import 'package:test/test.dart';
 
 void main() {
+  test(
+    'journey profile paths resolve against config and modes are validated',
+    () async {
+      final dir = await Directory.systemTemp.createTemp(
+        'runalong-journey-config-',
+      );
+      addTearDown(() => dir.delete(recursive: true));
+      final file = File('${dir.path}/runalong.yaml');
+      const content = '''version: 1
+profiles:
+  login:
+    command: [flutter, test, integration_test/app_test.dart]
+    source_root: app
+    journey_events_file: events.jsonl
+    runner_adapter: dart-json
+    capture: {mode: diagnose}
+''';
+      await file.writeAsString(content);
+      final profile = (await loadProfiles(dir.path))['login']!;
+      expect(profile.captureMode, 'diagnose');
+      expect(profile.runnerAdapter, 'dart-json');
+      expect(profile.sourceRoot, p.join(dir.path, 'app'));
+      expect(profile.journeyEventsFile, p.join(dir.path, 'events.jsonl'));
+      for (final invalid in [
+        content.replaceFirst('diagnose', 'fast'),
+        content.replaceFirst('dart-json', 'guess'),
+      ]) {
+        await file.writeAsString(invalid);
+        expect(() => loadProfiles(dir.path), throwsFormatException);
+      }
+    },
+  );
+
   test('machine batches retain every app endpoint rather than choosing one', () {
     const batch =
         '[{"event":"app.debugPort","params":{"wsUri":"ws://localhost:55/a/ws"}},'
@@ -38,6 +72,27 @@ void main() {
           'VMServiceFlutterDriver: Connecting to Flutter application at http://127.0.0.1:5432/token=/',
         )?.toString(),
         'ws://127.0.0.1:5432/token=/ws',
+      );
+    },
+  );
+  test(
+    'flutter test discovery uses the forwarded host endpoint, not the device URL',
+    () {
+      expect(
+        endpointFromLine(
+          '[+1871 ms] VM Service URL on device: http://127.0.0.1:33435/token=/',
+        ),
+        isNull,
+      );
+      expect(
+        endpointFromLine(
+          '[   +4 ms] test 0: VM Service uri is available at http://127.0.0.1:51950/token=/',
+        )?.toString(),
+        'ws://127.0.0.1:51950/token=/ws',
+      );
+      expect(
+        endpointFromLine('[        ] test 0: VM Service uri is not available'),
+        isNull,
       );
     },
   );

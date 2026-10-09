@@ -89,6 +89,10 @@ final class RunOptions {
     this.environment = const {},
     this.gates = const {},
     this.maxFrames = 200000,
+    this.captureMode = 'measure',
+    this.runnerAdapter = 'none',
+    this.journeyEventsFile,
+    this.sourceRoot,
   });
 
   final List<String> command;
@@ -109,6 +113,12 @@ final class RunOptions {
   /// enabled, buildP95Ms, rasterP95Ms, overBudgetPercent, baseline, regressionPercent.
   final JsonMap gates;
   final int maxFrames;
+
+  /// `diagnose` enables instrumentation and cannot establish a baseline pass.
+  final String captureMode;
+  final String runnerAdapter;
+  final String? journeyEventsFile;
+  final String? sourceRoot;
 
   bool get attachOnly => command.isEmpty;
 }

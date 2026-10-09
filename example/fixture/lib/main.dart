@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:runalong_context/runalong_context.dart';
 import 'reference_frames.dart';
 
 void main() {
@@ -10,9 +11,11 @@ void main() {
 
 class FixtureApp extends StatelessWidget {
   const FixtureApp({super.key});
+  static final _contextObserver = RunalongNavigatorObserver();
   @override
   Widget build(BuildContext context) => MaterialApp(
     title: 'Runalong fixture',
+    navigatorObservers: [if (RunalongContext.isEnabled) _contextObserver],
     theme: ThemeData(colorSchemeSeed: const Color(0xff006b5e)),
     home: const FixtureHome(),
   );
@@ -103,7 +106,12 @@ class _CatalogueScreenState extends State<CatalogueScreen>
           padding: const EdgeInsets.all(16),
           child: FilledButton(
             key: const ValueKey('run-animation'),
-            onPressed: () => _controller.forward(from: 0),
+            onPressed: () => RunalongContext.operation<void>(
+              stableId: 'catalogue.animate',
+              label: 'Run catalogue animation',
+              source: const RunalongSource(uri: 'lib/main.dart', line: 109),
+              body: () => _controller.forward(from: 0),
+            ),
             child: const Text('Run animation'),
           ),
         ),

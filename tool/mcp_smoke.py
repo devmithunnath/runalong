@@ -132,6 +132,7 @@ def main():
             tools = client.request("tools/list")["tools"]
             assert {tool["name"] for tool in tools} == {
                 "list_profiles", "start_run", "get_run", "cancel_run", "get_report", "compare_runs",
+                "list_journey", "get_finding_evidence",
             }, tools
             profiles = data(client.tool("list_profiles"))["profiles"]
             assert profiles == [{"name": "sleep"}], profiles
@@ -172,6 +173,8 @@ def main():
             assert report["report"]["exitCode"] == 130, report
             assert report["report"]["capture"]["status"] == "unavailable", report
             assert "child output must not enter protocol" not in json.dumps(report), report
+            journey = data(client.tool("list_journey", {"runId": run_id}))
+            assert journey["items"] == [], journey
             comparison = data(client.tool("compare_runs", {
                 "baselineRunId": run_id, "candidateRunId": run_id,
             }))
@@ -192,6 +195,24 @@ def main():
             assert len(compact["slowestFrames"]) == 20 and compact["omittedFrameCount"] == 5, compact
             assert compact["slowestFrames"][0]["number"] == 24, compact
             assert len(compact["navigation"]) == 200 and compact["omittedNavigationCount"] == 1, compact
+
+            contextual = project / ".runalong" / "runs" / "contextual"
+            contextual.mkdir()
+            (contextual / "report.json").write_text(json.dumps({
+                "schemaVersion": 2, "capture": {"status": "complete"},
+                "journey": {"version": 1, "items": [{
+                    "id": "operation-1", "stableId": "login.submit", "type": "operation",
+                    "label": "Submit login", "durationMs": 300,
+                    "metrics": {"sourceCandidates": [{"uri": "package:app/login.dart", "line": 10,
+                         "provenance": "local_candidate"} for _ in range(45)]},
+                }]},
+            }), encoding="utf-8")
+            items = data(client.tool("list_journey", {"runId": "contextual", "limit": 1}))
+            assert items["total"] == 1 and items["items"][0]["stableId"] == "login.submit", items
+            evidence = data(client.tool("get_finding_evidence", {"runId": "contextual", "itemId": "operation-1"}))
+            assert len(evidence["item"]["metrics"]["sourceCandidates"]) == 40, evidence
+            missing_item = client.tool("get_finding_evidence", {"runId": "contextual", "itemId": "missing"})
+            assert missing_item["isError"], missing_item
 
             # A historical symlink must not expose files outside the runs root.
             if os.name != "nt":
@@ -224,7 +245,7 @@ def main():
             assert unowned["isError"] and unowned["structuredContent"]["code"] == "not_owned", unowned
         finally:
             reopened.close()
-    print("PASS: MCP 2025-11-25 negotiation, six tools, structured output, async runs, "
+    print("PASS: MCP 2025-11-25 negotiation, eight tools, structured output, async runs, "
           "cancellation, report retrieval, path boundaries, and EOF finalization")
 
 

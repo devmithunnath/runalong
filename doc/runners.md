@@ -34,6 +34,22 @@ Runalong discovers a VM Service URL in the wrapped command's output. If the runn
 
 A service connection established after app startup misses the preceding frames. This is useful diagnostic data but incomplete whole-journey measurement. A host driver that merely calls `FlutterDriver.connect()` does not eliminate that race: the driver can resume the app before returning.
 
+### Existing `flutter test` integration suites
+
+For a diagnostic capture on an Android emulator, keep the test source unchanged and add launcher flags:
+
+```sh
+runalong run --timeout 1800 -- \
+  flutter test integration_test/app_test.dart -d EMULATOR_ID \
+    --no-dds --verbose --reporter expanded
+```
+
+Verbose output exposes the host VM endpoint used by the test runner. Runalong recognizes `test N: VM Service uri is available at ...`; it ignores the earlier `VM Service URL on device` message because the device port may differ from the forwarded host port. `--no-dds` allows a direct VM connection alongside the runner.
+
+This `flutter test` route runs in debug mode on the tested Flutter 3.29 toolchain. Treat its measurements as diagnostic evidence. Debug captures cannot pass performance gates, and emulator timings are not a physical-device baseline. For performance comparisons, use a profile launch on a supported target.
+
+The recorder's host SDK and the app's Flutter SDK can differ: this recipe was exercised with a Dart 3.11.4 recorder and a Flutter 3.29.0 / Dart 3.7.0 app. When keeping separate SDKs, invoke the recorder with its supported host Dart executable and launch the test with the app's Flutter executable. Device metadata probes use `flutter` from `PATH`; make that the same Flutter SDK as the app's runner. The app does not need an SDK or dependency upgrade solely to add Runalong.
+
 ## Mode C: endpoint file
 
 `--vm-service-uri-file PATH` waits for a file containing the endpoint. Your launcher can write the actual service URL there. Use a fresh file for each launch and delete stale files before a run. Supply an HTTP(S) VM Service URL or its WebSocket equivalent.

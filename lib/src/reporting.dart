@@ -2,6 +2,9 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'model.dart';
+import 'journey.dart';
+import 'journey_template.dart';
+import 'report_insights.dart';
 import 'report_template.dart';
 
 const _maximumReportFrames = 200000;
@@ -10,8 +13,9 @@ const _maximumReportFrames = 200000;
 JsonMap buildReport(
   JsonMap manifest,
   Iterable<FrameSample> frames,
-  List<JsonMap> navigation,
-) {
+  List<JsonMap> navigation, {
+  List<JsonMap> extraEvents = const [],
+}) {
   final report = jsonDecode(jsonEncode(manifest)) as JsonMap;
   final capture = report['capture'] as JsonMap? ?? <String, dynamic>{};
   report['capture'] = capture;
@@ -92,7 +96,8 @@ JsonMap buildReport(
           'Cadence is not display presentation FPS; idle time is not jank.',
     },
   };
-  report['schemaVersion'] = manifest['schemaVersion'] ?? 1;
+  report['schemaVersion'] =
+      manifest['schemaVersion'] == 2 || extraEvents.isNotEmpty ? 2 : 1;
   report['metrics'] = metrics;
   report['budget'] = _evaluateBudget(report, metrics);
   report['frames'] = ordered.map((f) => f.toJson()).toList();
@@ -102,12 +107,23 @@ JsonMap buildReport(
         (event) => <String, dynamic>{
           'kind': 'navigation',
           if (event['receivedAt'] is String) 'receivedAt': event['receivedAt'],
+          if (event['isolate'] is String) 'isolate': event['isolate'],
           if (event['routeName'] is String)
             'routeName': sanitizeRouteName(event['routeName'] as String),
           'attribution': 'approximate',
         },
       )
       .toList();
+  if (report['schemaVersion'] == 2) {
+    report['journey'] = buildJourney(report, extraEvents);
+  }
+  report['insights'] = buildInsights(report);
+  if (report['journey'] is JsonMap) {
+    report['insights'] = addJourneyInsights(
+      report['insights'] as JsonMap,
+      report['journey'] as JsonMap,
+    );
+  }
   return report;
 }
 
@@ -137,6 +153,12 @@ JsonMap _evaluateBudget(JsonMap report, JsonMap metrics) {
     return {'status': 'disabled', 'reasons': <String>[]};
   }
   final reasons = <String>[];
+  if (report['captureMode'] == 'diagnose' ||
+      (report['capture'] as JsonMap?)?['mode'] == 'diagnose') {
+    reasons.add(
+      'Diagnose captures change instrumentation and cannot pass rendering gates.',
+    );
+  }
   final automation = (report['automation'] as JsonMap?)?['status'];
   if (automation != 'passed' && automation != 'not_applicable') {
     reasons.add(
@@ -212,10 +234,10 @@ JsonMap compareReports(
   double? regressionPercent,
 }) {
   final unsupported = [
-    if (baseline['schemaVersion'] != 1)
-      'Unsupported baseline schema version: ${baseline['schemaVersion']}. Expected 1.',
-    if (candidate['schemaVersion'] != 1)
-      'Unsupported candidate schema version: ${candidate['schemaVersion']}. Expected 1.',
+    if (![1, 2].contains(baseline['schemaVersion']))
+      'Unsupported baseline schema version: ${baseline['schemaVersion']}. Expected 1 or 2.',
+    if (![1, 2].contains(candidate['schemaVersion']))
+      'Unsupported candidate schema version: ${candidate['schemaVersion']}. Expected 1 or 2.',
   ];
   if (unsupported.isNotEmpty) {
     return {
@@ -231,6 +253,30 @@ JsonMap compareReports(
   }
   final allowed = regressionPercent;
   final reasons = <String>[];
+  final aMode =
+      baseline['captureMode'] ??
+      (baseline['capture'] as JsonMap?)?['mode'] ??
+      'measure';
+  final bMode =
+      candidate['captureMode'] ??
+      (candidate['capture'] as JsonMap?)?['mode'] ??
+      'measure';
+  final diagnosticComparison = aMode == 'diagnose' && bMode == 'diagnose';
+  if (aMode != bMode) reasons.add('Capture modes differ between runs.');
+  final aSettings = _telemetrySettings(baseline);
+  final bSettings = _telemetrySettings(candidate);
+  if (jsonEncode(_canonicalJson(aSettings)) !=
+      jsonEncode(_canonicalJson(bSettings))) {
+    reasons.add(
+      'Telemetry settings or sampled signal availability differ between runs.',
+    );
+  }
+  if (jsonEncode(_contextCoverage(baseline)) !=
+      jsonEncode(_contextCoverage(candidate))) {
+    reasons.add(
+      'Named journey coverage differs; missing or unfinished work cannot establish a comparable baseline.',
+    );
+  }
   final a = baseline['environment'] as JsonMap? ?? {};
   final b = candidate['environment'] as JsonMap? ?? {};
   if (allowed != null && (!allowed.isFinite || allowed < 0)) {
@@ -252,10 +298,10 @@ JsonMap compareReports(
     if (automation != 'passed' && automation != 'not_applicable') {
       reasons.add('${entry.$1} automation did not complete successfully.');
     }
-    if (env['buildMode'] != 'profile') {
+    if (!diagnosticComparison && env['buildMode'] != 'profile') {
       reasons.add('${entry.$1} is not a verified profile build.');
     }
-    if (env['physical'] != true) {
+    if (!diagnosticComparison && env['physical'] != true) {
       reasons.add('${entry.$1} is not identified as a physical device.');
     }
     if ((entry.$2['capture'] as JsonMap?)?['status'] != 'complete') {
@@ -264,6 +310,9 @@ JsonMap compareReports(
     if (((entry.$2['metrics'] as JsonMap?)?['frameCount'] as num? ?? 0) <= 0) {
       reasons.add('${entry.$1} has no frames.');
     }
+  }
+  if (diagnosticComparison && a['buildMode'] != b['buildMode']) {
+    reasons.add('Build modes differ between diagnostic captures.');
   }
   final baselineAutomation = (baseline['automation'] as JsonMap?)?['status'];
   final candidateAutomation = (candidate['automation'] as JsonMap?)?['status'];
@@ -305,7 +354,7 @@ JsonMap compareReports(
       'changePercent': change,
       'status': change == null
           ? 'inconclusive'
-          : allowed == null
+          : allowed == null || diagnosticComparison
           ? 'compared'
           : change > allowed
           ? 'fail'
@@ -323,22 +372,87 @@ JsonMap compareReports(
     'compatible': compatible,
     'status': !compatible
         ? 'inconclusive'
-        : allowed == null
+        : allowed == null || diagnosticComparison
         ? 'compared'
         : failed
         ? 'fail'
         : 'pass',
     'reasons': reasons,
     'regressionPercent': allowed,
+    'renderingGateEligible': !diagnosticComparison,
+    if (diagnosticComparison)
+      'notes': [
+        'Diagnose runs are compared descriptively; instrumentation changes timings and no rendering pass is established.',
+      ],
     'metrics': differences,
+    if (baseline['journey'] is JsonMap || candidate['journey'] is JsonMap)
+      'journey': compareJourneys(
+        baseline,
+        candidate,
+        compatible: compatible,
+        regressionPercent: diagnosticComparison ? null : allowed,
+      ),
   };
+}
+
+List<String> _contextCoverage(JsonMap report) {
+  final items = (report['journey'] as JsonMap?)?['items'] as List? ?? const [];
+  return items
+      .whereType<JsonMap>()
+      .map(
+        (i) => jsonEncode([
+          i['comparisonKey'],
+          i['type'],
+          i['coverage'],
+          i['status'],
+          i['comparable'],
+        ]),
+      )
+      .toList()
+    ..sort();
+}
+
+dynamic _telemetrySettings(JsonMap report) {
+  final telemetry = (report['capture'] as JsonMap?)?['telemetry'] as JsonMap?;
+  if (telemetry == null) return null;
+  final connections = telemetry['connections'];
+  if (connections is! List) return telemetry['settings'];
+  return connections.whereType<JsonMap>().map((connection) {
+    final settings = connection['settings'] as JsonMap? ?? {};
+    final capabilities = connection['capabilities'] as JsonMap? ?? {};
+    return <String, dynamic>{
+      'captureMode': connection['captureMode'],
+      'memoryIntervalMs': connection['memoryIntervalMs'],
+      'cpuPollIntervalMs': connection['cpuPollIntervalMs'],
+      'streams':
+          settings['effectiveTimelineStreams'] ?? settings['timelineStreams'],
+      'profiler': settings['profiler'],
+      'profilePeriod': settings['profilePeriod'],
+      'extensions': {
+        for (final entry in settings.entries)
+          if (entry.key.startsWith('ext.'))
+            entry.key: entry.value is Map
+                ? (entry.value as Map)['effective']
+                : entry.value,
+      },
+      'capabilities': {
+        for (final name in ['clock', 'timeline', 'cpu', 'memory', 'rss', 'gc'])
+          name: capabilities[name],
+      },
+    };
+  }).toList();
 }
 
 /// Derived files can be regenerated; the capture manifest and event log remain
 /// untouched, so a report-generation failure does not lose the measurements.
 Future<void> writeReports(Directory directory, JsonMap report) async {
   await directory.create(recursive: true);
-  final canonical = _canonicalJson(report) as JsonMap;
+  final canonical =
+      _canonicalJson({
+            ...report,
+            'insights': report['insights'] ?? buildInsights(report),
+          })
+          as JsonMap;
   await _atomicWrite(
     File('${directory.path}/report.json'),
     '${const JsonEncoder.withIndent('  ').convert(canonical)}\n',
@@ -374,13 +488,14 @@ Future<JsonMap> regenerateReport(Directory directory) async {
   final manifest =
       jsonDecode(await File('${directory.path}/manifest.json').readAsString())
           as JsonMap;
-  if (manifest['schemaVersion'] != 1) {
+  if (![1, 2].contains(manifest['schemaVersion'])) {
     throw FormatException(
-      'Unsupported manifest schema version: ${manifest['schemaVersion']}. Expected 1.',
+      'Unsupported manifest schema version: ${manifest['schemaVersion']}. Expected 1 or 2.',
     );
   }
   final frames = <FrameSample>[];
   final navigation = <JsonMap>[];
+  final extraEvents = <JsonMap>[];
   var invalid = 0;
   var discarded = 0;
   final events = File('${directory.path}/events.jsonl');
@@ -402,6 +517,23 @@ Future<JsonMap> regenerateReport(Directory directory) async {
           }
         } else if (event['kind'] == 'navigation') {
           navigation.add(event);
+        } else if ({
+          'clock',
+          'context',
+          'runner',
+          'frame_timeline',
+          'memory',
+          'gc',
+          'trace',
+          'cpu',
+          'widget_rebuild',
+          'source_index',
+        }.contains(event['kind'])) {
+          if (extraEvents.length < _maximumReportFrames) {
+            extraEvents.add(event);
+          } else {
+            discarded++;
+          }
         }
       } on FormatException {
         invalid++;
@@ -430,7 +562,12 @@ Future<JsonMap> regenerateReport(Directory directory) async {
       if (discarded > 0) 'Report limit omitted $discarded records.',
     ];
   }
-  final report = buildReport(manifest, frames, navigation);
+  final report = buildReport(
+    manifest,
+    frames,
+    navigation,
+    extraEvents: extraEvents,
+  );
   final baselinePath = (report['gates'] as JsonMap?)?['baseline'];
   if (baselinePath is String) {
     // Regeneration must not change a run's outcome because a mutable external
@@ -469,7 +606,11 @@ void applyComparison(JsonMap report, JsonMap comparison) {
     );
   }
   if (comparison['status'] == 'compared') {
-    reasons.add('Baseline gating requires an explicit regression threshold.');
+    reasons.add(
+      comparison['renderingGateEligible'] == false
+          ? 'Diagnostic comparisons cannot pass rendering gates.'
+          : 'Baseline gating requires an explicit regression threshold.',
+    );
   }
   budget['status'] = reasons.isNotEmpty
       ? 'inconclusive'
@@ -487,6 +628,7 @@ void applyComparison(JsonMap report, JsonMap comparison) {
 String _number(dynamic value) =>
     value is num ? value.toStringAsFixed(2) : 'unavailable';
 String _md(dynamic value) => '$value'
+    .replaceAllMapped(RegExp(r'[\\`*_{}\[\]()!#]'), (match) => '\\${match[0]}')
     .replaceAll(RegExp(r'[\r\n|]'), ' ')
     .replaceAll('<', '&lt;')
     .replaceAll('>', '&gt;');
@@ -495,6 +637,45 @@ String _markdown(JsonMap report) {
   final metrics = report['metrics'] as JsonMap;
   final capture = report['capture'] as JsonMap? ?? {};
   final budget = report['budget'] as JsonMap;
+  final insights = report['insights'] as JsonMap? ?? buildInsights(report);
+  final findings = insights['findings'] as List? ?? [];
+  final journeyItems =
+      ((report['journey'] as JsonMap?)?['items'] as List? ?? const [])
+          .whereType<JsonMap>()
+          .toList();
+  final journeyLines = journeyItems.isEmpty
+      ? ''
+      : [
+          '### Tests, screens, and operations',
+          '',
+          '| Context | Duration | Frames | Build p95 | Raster p95 | Coverage |',
+          '| --- | ---: | ---: | ---: | ---: | --- |',
+          for (final item in journeyItems.take(30))
+            '| ${_md(item['type'])}: ${_md(item['label'])} | ${_number(item['durationMs'])} ms | ${item['metrics']['frameCount']} | ${_number((item['metrics']['buildMs'] as JsonMap?)?['p95'])} ms | ${_number((item['metrics']['rasterMs'] as JsonMap?)?['p95'])} ms | ${_md(item['coverage'])} |',
+          '',
+          'Open report.html to select one interval across frames, memory, sampled code, and widget/source evidence. Boundary-overlapping frames are excluded from exact attribution.',
+          '',
+        ].join('\n');
+  final findingLines = <String>[
+    for (final finding in findings) ...[
+      '### ${_md(finding['title'])}',
+      '',
+      '**Observed:** ${_md(finding['observation'])}',
+      '',
+      '**Interpretation:** ${_md(finding['interpretation'])}',
+      '',
+      '**Try next:** ${_md(finding['nextStep'])}',
+      '',
+      if (finding['routeHint'] != null)
+        'Approximate route hint: ${_md(finding['routeHint'])}. ${_md(finding['attribution'])}',
+      if (finding['evidence'] case final Map evidence)
+        'Evidence: segment ${_md(evidence['segment'])}, isolate ${_md(evidence['isolate'])}, '
+            'frames ${_md(evidence['firstFrame'])}–${_md(evidence['lastFrame'])}; '
+            '${_number(evidence['startMs'])}–${_number(evidence['endMs'])} ms '
+            'from that segment/isolate’s first captured frame.',
+      '',
+    ],
+  ];
   final gaps = capture['gaps'] as List? ?? [];
   final gapLines = <String>[
     for (final gap in gaps.take(20)) '- Capture gap: ${_md(_gapReason(gap))}',
@@ -504,6 +685,17 @@ String _markdown(JsonMap report) {
   return '''## Runalong performance report
 
 Run: `${_md(report['id'])}`
+
+**${_md(insights['headline'])}**
+
+${_md(insights['summary'])}
+
+${(insights['limitations'] as List? ?? []).map((reason) => '- ${_md(reason)}').join('\n')}
+
+$journeyLines
+${findingLines.join('\n')}
+
+### Run outcome and measurements
 
 | Result | Status |
 | --- | --- |
@@ -544,5 +736,9 @@ String _html(JsonMap report) {
       .replaceAll('&', r'\u0026')
       .replaceAll('\u2028', r'\u2028')
       .replaceAll('\u2029', r'\u2029');
-  return reportHtmlTemplate.replaceFirst('RUNALONG_JSON_PAYLOAD', data);
+  return reportHtmlTemplate
+      .replaceFirst('RUNALONG_JOURNEY_STYLE', journeyStyle)
+      .replaceFirst('RUNALONG_JOURNEY_HTML', journeyHtml)
+      .replaceFirst('RUNALONG_JOURNEY_SCRIPT', journeyScript)
+      .replaceFirst('RUNALONG_JSON_PAYLOAD', data);
 }

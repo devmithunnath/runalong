@@ -51,8 +51,14 @@ runalong run --profile smoke
 | `--environment ID` | Comparable execution environment identifier |
 | `--workload ID` | Comparable scenario identifier |
 | `--json` | Machine-readable CLI result |
+| `--capture-mode measure\|diagnose` | Normal capture or instrumented diagnosis; default `measure` |
+| `--runner-adapter none\|dart-json` | Parse existing JSON reporter test boundaries; default `none` |
+| `--journey-events-file PATH` | Fresh structured external-runner event input |
+| `--source-root PATH` | Optional matching checkout for immutable source declaration candidates |
 
 Use `runalong COMMAND --help` for authoritative command options.
+
+Profiles use `capture.mode`, top-level `runner_adapter`, `journey_events_file`, and `source_root`. Paths are relative to the configuration. See the [journey guide](journey.md) for context integration, metrics, event format and attribution limits. Diagnostic captures are instrumented and cannot pass normal rendering gates.
 
 ## Explicit gates
 

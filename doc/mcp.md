@@ -26,6 +26,8 @@ The surrounding settings key depends on your MCP client. Ensure the executable i
 | `get_run` | Read the state of a run |
 | `cancel_run` | Cancel one active run and finalize available evidence |
 | `get_report` | Read compact metadata/metrics and up to 20 slowest measured frames |
+| `list_journey` | Page through recorded tests, screen visits and operations (up to 100 per page) |
+| `get_finding_evidence` | Read bounded evidence for an `itemId` from the journey or frame findings |
 | `compare_runs` | Compare two finalized runs without changing either baseline |
 
 Only reviewed configuration profiles can start commands. The tool accepts a profile name, not arbitrary shell text. One run is active at a time. Full JSON/HTML artifacts remain on disk; the compact report keeps large frame arrays out of an assistant's context.
@@ -39,6 +41,7 @@ End-of-input disconnect cancels the active run and preserves available evidence.
 - “Run the existing smoke profile and report automation, capture, and budget status separately.”
 - “Compare these two run IDs. Explain whether the environment makes this comparison valid.”
 - “Identify the worst measured rendering window and suggest a specific follow-up experiment.”
+- “List the recorded login operations, inspect the slowest one's evidence, and distinguish observed runtime locations from source candidates.”
 
 The optional [skill](../skills/runalong/SKILL.md) reinforces these interpretation rules. It does not authorize changing thresholds, replacing a baseline, or running unrequested experiments.
 

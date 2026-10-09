@@ -10,6 +10,8 @@ import 'config.dart';
 import 'model.dart';
 import 'process_launcher.dart';
 import 'reporting.dart';
+import 'runner_events.dart';
+import 'source_resolver.dart';
 
 /// Extracts only documented launcher messages; ordinary URLs in app logs are ignored.
 Uri? endpointFromLine(String line) {
@@ -39,7 +41,7 @@ List<Uri> endpointsFromLine(String line) {
     }
   }
   if (!RegExp(
-    r'(Dart VM service|Dart VM Service|VM Service is listening|Observatory is listening|VMServiceFlutterDriver: Connecting to Flutter application at)',
+    r'(Dart VM service|Dart VM Service|VM Service is listening|Observatory is listening|VMServiceFlutterDriver: Connecting to Flutter application at|test \d+: VM Service uri is available at)',
     caseSensitive: false,
   ).hasMatch(line)) {
     return [];
@@ -89,6 +91,22 @@ final class RunService {
     }
     positiveNumber(options.refreshRateHz, 'refreshRateHz');
     validateGates(Map<String, dynamic>.from(options.gates));
+    if (!['measure', 'diagnose'].contains(options.captureMode) ||
+        !['none', 'dart-json'].contains(options.runnerAdapter)) {
+      throw const FormatException('Invalid capture mode or runner adapter.');
+    }
+    if (options.sourceRoot != null &&
+        !await Directory(options.sourceRoot!).exists()) {
+      throw const FormatException('Source root does not exist.');
+    }
+    if (options.journeyEventsFile != null) {
+      final input = File(options.journeyEventsFile!);
+      if (await input.exists() && await input.length() != 0) {
+        throw const FormatException(
+          'Use a fresh, empty journey-events file for each run.',
+        );
+      }
+    }
     final commandLaunch = options.attachOnly
         ? null
         : prepareCommand(
@@ -105,6 +123,7 @@ final class RunService {
     }
     await directory.create(recursive: true);
     final began = DateTime.now().toUtc();
+    final hostClock = Stopwatch()..start();
     final capture = <String, dynamic>{
       'status': 'unavailable',
       'startedAt': null,
@@ -115,6 +134,7 @@ final class RunService {
       'invalidEvents': 0,
       'droppedEvents': 0,
       'frameCount': 0,
+      'mode': options.captureMode,
     };
     final environment = <String, dynamic>{
       ...options.environment,
@@ -130,7 +150,7 @@ final class RunService {
       'exitCode': null,
     };
     final manifest = <String, dynamic>{
-      'schemaVersion': 1,
+      'schemaVersion': 2,
       'id': id,
       'toolVersion': '0.1.0',
       'startedAt': began.toIso8601String(),
@@ -139,6 +159,8 @@ final class RunService {
       'capture': capture,
       'environment': environment,
       'gates': {...options.gates},
+      'captureMode': options.captureMode,
+      'runnerAdapter': options.runnerAdapter,
     };
     final manifestFile = File(p.join(directory.path, 'manifest.json'));
     Future<void> saveManifest() => manifestFile
@@ -153,13 +175,26 @@ final class RunService {
         writeFailure = error;
       },
     );
+    void record(JsonMap event) {
+      if (writeFailure == null) events.writeln(jsonEncode(event));
+    }
+
+    final runnerEvents = RunnerEvents(
+      hostMicros: () => hostClock.elapsedMicroseconds,
+      onRecord: record,
+    );
+    Timer? journeyTimer;
+    if (options.journeyEventsFile != null) {
+      journeyTimer = Timer.periodic(const Duration(milliseconds: 200), (_) {
+        unawaited(runnerEvents.readFile(options.journeyEventsFile!));
+      });
+    }
     final collector = VmCollector(
       options: options,
       capture: capture,
       environment: environment,
-      onRecord: (event) {
-        if (writeFailure == null) events.writeln(jsonEncode(event));
-      },
+      onRecord: record,
+      hostMicros: () => hostClock.elapsedMicroseconds,
     );
     final stopped = Completer<void>();
     void stop() {
@@ -239,6 +274,9 @@ final class RunService {
               final lines = pending.split('\n');
               pending = lines.removeLast();
               for (final line in lines) {
+                if (options.runnerAdapter == 'dart-json') {
+                  runnerEvents.dartLine(line);
+                }
                 for (final endpoint in endpointsFromLine(line)) {
                   discoveredEndpoint(endpoint);
                 }
@@ -248,6 +286,9 @@ final class RunService {
               }
             },
             onDone: () {
+              if (options.runnerAdapter == 'dart-json') {
+                runnerEvents.dartLine(pending);
+              }
               for (final endpoint in endpointsFromLine(pending)) {
                 discoveredEndpoint(endpoint);
               }
@@ -407,12 +448,28 @@ final class RunService {
         }
       }
       if (!stopped.isCompleted) {
+        if (attachedBeforeCommand) {
+          try {
+            await Future.any([
+              collector.telemetryReady,
+              stopped.future,
+            ]).timeout(options.connectTimeout);
+          } catch (_) {
+            (capture['warnings'] as List).add(
+              'Optional telemetry setup did not finish before automation. Inspect capability coverage.',
+            );
+            capture['telemetrySetupIncomplete'] = true;
+          }
+        }
+      }
+      if (!stopped.isCompleted) {
         if (!options.attachOnly) {
           child = await commandLaunch!.start(
             workingDirectory: options.workingDirectory,
           );
           automation['status'] = 'running';
           automation['startedAt'] = DateTime.now().toUtc().toIso8601String();
+          automation['startedHostMicros'] = hostClock.elapsedMicroseconds;
           if (!attachedBeforeCommand) {
             (capture['gaps'] as List<dynamic>).add({
               'at': automation['startedAt'],
@@ -430,6 +487,7 @@ final class RunService {
               automation['finishedAt'] = DateTime.now()
                   .toUtc()
                   .toIso8601String();
+              automation['finishedHostMicros'] = hostClock.elapsedMicroseconds;
               stop();
             }),
           );
@@ -492,6 +550,12 @@ final class RunService {
       }
       await ambiguousClose;
       await collector.close();
+      journeyTimer?.cancel();
+      if (options.journeyEventsFile != null) {
+        await runnerEvents.readFile(options.journeyEventsFile!, finish: true);
+      }
+      capture['runnerEvents'] = runnerEvents.count;
+      capture['invalidRunnerEvents'] = runnerEvents.invalidRecords;
       await connectionTask?.timeout(
         const Duration(seconds: 6),
         onTimeout: () {},
@@ -525,6 +589,13 @@ final class RunService {
         );
       }
       manifest['finishedAt'] = capture['finishedAt'];
+      capture['finishedHostMicros'] = hostClock.elapsedMicroseconds;
+      if (options.sourceRoot != null) {
+        manifest['sourceIndex'] = await buildSourceIndex(
+          options.sourceRoot!,
+          expectedRevision: options.environment['appRevision'] as String?,
+        );
+      }
       try {
         await saveManifest();
       } catch (_) {

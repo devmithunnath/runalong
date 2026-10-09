@@ -28,6 +28,8 @@ Runalong itself has collection overhead. The included fixture-only reference hel
 
 ## Evidence and explanation
 
+The report leads with deterministic findings computed from the recorded phases. It groups nearby over-budget samples separately by phase, segment, and isolate, and links every finding to its supporting frames. The displayed relative times start at the first captured frame in that segment/isolate. They are not app-launch timestamps or automatic action labels. See [report findings](report-findings.md).
+
 AI may identify unusual windows, compare distributions, and suggest a follow-up experiment. Frame timings alone do not identify the offending Dart function. A code-level diagnosis needs corroborating source, CPU traces, or a controlled change.
 
 [Flutter performance guidance](https://docs.flutter.dev/perf/ui-performance) · [FrameTiming API](https://api.flutter.dev/flutter/dart-ui/FrameTiming-class.html)

@@ -2,13 +2,25 @@
 
 **Flutter performance reports, alongside your existing tests.**
 
-Record Flutter rendering performance while your existing UI automation runs. Keep your test source files unchanged.
+**Get Flutter performance reports without adding a recorder to your app.** Run your existing UI tests unchanged.
 
 Runalong is a **host-side Dart CLI**. It connects to the running app's Dart VM Service, listens to Flutter frame events, and writes an offline report. Your runner still performs the taps, gestures, assertions, and cleanup.
+
+New to performance tooling? Read [How Runalong works, in plain English](doc/how-runalong-works.md) for a guided explanation of the connection, measurements, reports, CI, and AI integration, with examples and a glossary.
 
 This first release is a local development tool. It has not been published to pub.dev. Physical Android/iOS device validation and individual automation-runner certification are pending; see [validation status](doc/validation.md).
 
 The chosen package and command name is `runalong`, with `ral` as an optional short command alias. Publishing availability remains unconfirmed.
+
+## Why Runalong runs outside your app
+
+- **No mandatory app integration:** install the CLI on your computer or CI machine. Basic recording needs no app dependency or test wrapper. An optional context helper adds named screens and operations.
+- **Keep your automation:** the collector connects to Flutter's VM Service independently of the runner. Reuse existing journeys instead of maintaining separate performance tests.
+- **Upgrade independently:** update Runalong's reports, comparisons, and agent integration without changing the app's dependencies or rebuilding it just for those tool updates.
+- **Process reports on the host:** aggregation, HTML generation, baseline comparisons, and MCP communication run outside the app being measured.
+- **Keep evidence outside the app process:** records already written on the host can remain available after an app crash, with missing coverage clearly marked.
+
+The app must expose a reachable VM Service, and performance gates require a verified profile build. Launch configuration may need adjustment. Service communication still has overhead, and the external approach can miss startup before attachment. Its advantage is easier integration and independent tooling; it does not inherently make Flutter's timing measurements more accurate. Read [the design comparison and trade-offs](doc/how-runalong-works.md#why-choose-an-external-recorder).
 
 ## Start locally
 
@@ -55,16 +67,18 @@ A command can also supply its endpoint through `--vm-service-uri-file PATH`. See
 
 Each capture gets a unique run directory under `--output` (default: `.runalong/runs`). The CLI prints its exact path. That run directory contains:
 
-- `report.html`: a self-contained interactive frame timeline.
-- `report.json`: machine-readable measurements and capture metadata.
-- `summary.md`: a short CI-friendly result.
+- `report.html`: a journey view connecting named screens/operations to frames, memory, diagnostic CPU/widget evidence and available source locations.
+- `report.json`: machine-readable measurements, capture metadata, and the same structured findings.
+- `summary.md`: findings and evidence references for CI.
 - `events.jsonl` and `manifest.json`: raw capture evidence and run metadata.
 
 The report separates **automation status**, **capture status**, and **performance budget status**. A passing functional test is not a passing performance test.
 
+Start with “Where to look first,” then use **Show these frames** to inspect a finding or **Copy investigation brief** to share its evidence with a teammate or coding agent. Charts and sample tables are available under **Explore the frame evidence**. These explanations are generated locally after collection and need no AI account. Named screens/operations require the optional context helper; deeper widget and CPU evidence requires an explicitly instrumented diagnosis. See [how to read the findings](doc/report-findings.md).
+
 Measurements include build/raster duration distributions, over-budget frames when a refresh rate is known, and frame cadence where the samples support it. Frame cadence is not confirmed display-presentation FPS. Idle periods are not evidence of jank.
 
-Flutter navigation events are included as approximate hints when available. They cannot identify every tap, tab, or business action. This release does not claim automatic per-action segmentation or provide runner-specific action adapters.
+For useful screen and loading labels, use the optional [context helper](packages/runalong_context/README.md) and [journey guide](doc/journey.md). `--runner-adapter dart-json` adds existing Flutter test boundaries. `--capture-mode diagnose` enables deeper instrumented traces. Optional `--source-root` adds local declaration candidates without embedding source code. Unnamed navigation alone remains approximate; Runalong does not invent taps or screen identities.
 
 ## Existing runners
 

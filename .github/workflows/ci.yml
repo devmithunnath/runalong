@@ -32,6 +32,26 @@ jobs:
         if: runner.os == 'Linux'
         run: python tool/check_package.py
 
+  context:
+    name: Context helper on Flutter ${{ matrix.flutter }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        flutter: ['3.29.0', '3.41.6']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ matrix.flutter }}
+          channel: stable
+          cache: true
+      - working-directory: packages/runalong_context
+        run: |
+          flutter pub get
+          dart format --output=none --set-exit-if-changed lib test
+          flutter analyze
+          flutter test
+
   fixture:
     name: macOS profile fixture (diagnostic)
     runs-on: macos-latest
@@ -63,7 +83,8 @@ jobs:
             --output ../../artifacts/fixture \
             -- flutter drive --profile --no-dds -d macos \
               --driver=test_driver/integration_test.dart \
-              --target=integration_test/reference_test.dart
+              --target=integration_test/reference_test.dart \
+              --dart-define=RUNALONG_CONTEXT=true
       - name: Compare overlapping frames with fixture reference
         run: |
           python3 example/fixture/tool/compare_reference.py \

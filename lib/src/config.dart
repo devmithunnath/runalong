@@ -129,6 +129,9 @@ Future<Map<String, RunOptions>> loadProfiles(String projectDirectory) async {
       'environment',
       'capture',
       'gates',
+      'runner_adapter',
+      'journey_events_file',
+      'source_root',
     }, 'profile ${entry.key}');
     final rawCommand = value['command'];
     if (rawCommand is! List ||
@@ -146,6 +149,7 @@ Future<Map<String, RunOptions>> loadProfiles(String projectDirectory) async {
       'duration_seconds',
       'refresh_rate_hz',
       'max_frames',
+      'mode',
     }, 'capture');
     final environment = _map(value['environment'], 'environment');
     _keys(environment, {
@@ -186,6 +190,14 @@ Future<Map<String, RunOptions>> loadProfiles(String projectDirectory) async {
       throw const FormatException('Choose a VM URL or URI file, not both.');
     }
     final maxFrames = capture['max_frames'];
+    final captureMode = capture['mode'] ?? 'measure';
+    if (!['measure', 'diagnose'].contains(captureMode)) {
+      throw const FormatException('capture.mode must be measure or diagnose.');
+    }
+    final runnerAdapter = string('runner_adapter') ?? 'none';
+    if (!['none', 'dart-json'].contains(runnerAdapter)) {
+      throw const FormatException('runner_adapter must be none or dart-json.');
+    }
     if (maxFrames != null &&
         (maxFrames is! int || maxFrames <= 0 || maxFrames > 1000000)) {
       throw const FormatException(
@@ -217,6 +229,16 @@ Future<Map<String, RunOptions>> loadProfiles(String projectDirectory) async {
         'refresh_rate_hz',
       ),
       maxFrames: maxFrames as int? ?? 200000,
+      captureMode: captureMode as String,
+      runnerAdapter: runnerAdapter,
+      journeyEventsFile: string('journey_events_file') == null
+          ? null
+          : p.normalize(
+              p.join(projectDirectory, string('journey_events_file')!),
+            ),
+      sourceRoot: string('source_root') == null
+          ? null
+          : p.normalize(p.join(projectDirectory, string('source_root')!)),
     );
   }
   return result;
@@ -235,6 +257,7 @@ profiles:
       workload: smoke
       # Set physical: true only when using a physical device.
     capture:
+      mode: measure # diagnose adds CPU and widget traces; timings are instrumented.
       connect_timeout_seconds: 30
       timeout_seconds: 300
     gates:

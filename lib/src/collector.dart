@@ -5,20 +5,26 @@ import 'package:vm_service/vm_service.dart' as vm;
 
 import 'config.dart';
 import 'model.dart';
+import 'telemetry_collector.dart';
 
-/// A passive subscriber. It never clears timelines or changes VM profiling flags.
+/// Frame recording remains independent of the automation framework. Diagnostic
+/// instrumentation is explicit and its previous runtime settings are restored.
 final class VmCollector {
   VmCollector({
     required this.options,
     required this.capture,
     required this.environment,
     required this.onRecord,
-  });
+    int Function()? hostMicros,
+  }) : hostMicros =
+           hostMicros ?? (Stopwatch()..start()).elapsedMicrosecondsGetter;
 
   final RunOptions options;
   final JsonMap capture;
   final JsonMap environment;
   final void Function(JsonMap event) onRecord;
+  final int Function() hostMicros;
+  VmTelemetry? _telemetry;
   vm.VmService? _service;
   WebSocket? _socket;
   StreamSubscription<dynamic>? _socketSubscription;
@@ -27,6 +33,7 @@ final class VmCollector {
   final Map<String, String> _isolateSegments = {};
   final Set<String> _seen = {};
   final Set<String> _inspecting = {};
+  final Set<String> _inspectAgain = {};
   final Map<String, String> _modes = {};
   final Set<String> _frameIsolates = {};
   final Map<String, DateTime> _lastProbe = {};
@@ -37,6 +44,7 @@ final class VmCollector {
   var frameCount = 0;
 
   Future<void> get onDone => _service?.onDone ?? Future.value();
+  Future<void> get telemetryReady => _telemetry?.ready ?? Future.value();
 
   Future<void> connect(
     Uri uri, {
@@ -106,6 +114,7 @@ final class VmCollector {
       final id = event.isolate?.id;
       if (id == null) return;
       if (event.kind == 'IsolateExit') {
+        _telemetry?.isolateExited(id);
         final wasFlutter = _frameIsolates.contains(id);
         _isolateSegments.remove(id);
         _modes.remove(id);
@@ -118,7 +127,11 @@ final class VmCollector {
         }
       } else if (event.kind == 'IsolateRunnable' ||
           event.kind == 'ServiceExtensionAdded') {
-        unawaited(_inspectIsolate(id));
+        if (_inspecting.contains(id)) {
+          _inspectAgain.add(id);
+        } else {
+          unawaited(_inspectIsolate(id));
+        }
       }
     });
     try {
@@ -138,6 +151,18 @@ final class VmCollector {
           'This collector requires a native Flutter VM.',
         );
       }
+      _telemetry = VmTelemetry(
+        service: service,
+        options: options,
+        capture: capture,
+        connection: _connection,
+        hostMicros: hostMicros,
+        segmentFor: _segmentFor,
+        onRecord: onRecord,
+      );
+      // Optional capabilities are probed in the background; a slow or older
+      // VM must not delay the existing automation/capture handshake.
+      unawaited(_telemetry!.start());
       await bounded(
         Future.wait([
           for (final isolate in info.isolates ?? <vm.IsolateRef>[])
@@ -162,18 +187,11 @@ final class VmCollector {
     final isolate = event.isolate?.id;
     final data = event.extensionData?.data;
     if (isolate == null || data == null) return;
+    _telemetry?.extension(event);
     final now = DateTime.now().toUtc().toIso8601String();
     if (event.extensionKind == 'Flutter.Frame') {
       try {
-        final segment = _isolateSegments.putIfAbsent(isolate, () {
-          final id = '$_connection-${++_incarnation}';
-          (capture['segments'] as List<dynamic>).add({
-            'id': id,
-            'isolate': isolate,
-            'startedAt': now,
-          });
-          return id;
-        });
+        final segment = _segmentFor(isolate);
         final frame = FrameSample.fromJson({
           'segment': segment,
           'isolate': isolate,
@@ -195,6 +213,7 @@ final class VmCollector {
         frameCount++;
         capture['frameCount'] = frameCount;
         onRecord(frame.toJson());
+        _telemetry?.frame(frame);
         _updateMode();
         if (!_modes.containsKey(isolate) &&
             DateTime.now()
@@ -226,6 +245,18 @@ final class VmCollector {
     }
   }
 
+  String _segmentFor(String isolate) =>
+      _isolateSegments.putIfAbsent(isolate, () {
+        final id = '$_connection-${++_incarnation}';
+        (capture['segments'] as List<dynamic>).add({
+          'id': id,
+          'connection': _connection,
+          'isolate': isolate,
+          'startedAt': DateTime.now().toUtc().toIso8601String(),
+        });
+        return id;
+      });
+
   Future<void> _inspectIsolate(String id) async {
     final service = _service;
     if (service == null || _closed || !_inspecting.add(id)) return;
@@ -240,6 +271,7 @@ final class VmCollector {
           extensions.any((e) => e.startsWith('ext.flutter.')) ||
           _frameIsolates.contains(id);
       if (!flutter) return;
+      _telemetry?.inspectIsolate(info);
       if (extensions.contains('ext.flutter.reassemble')) {
         _modes[id] = 'debug';
       } else {
@@ -304,6 +336,9 @@ final class VmCollector {
       // A disconnected or not-yet-runnable isolate is unknown, never "profile".
     } finally {
       _inspecting.remove(id);
+      if (_inspectAgain.remove(id) && !_closed && service == _service) {
+        unawaited(_inspectIsolate(id));
+      }
     }
   }
 
@@ -324,6 +359,8 @@ final class VmCollector {
   }
 
   Future<void> _disconnect() async {
+    await _telemetry?.stop();
+    _telemetry = null;
     await _extensions?.cancel();
     await _isolates?.cancel();
     await _service?.dispose();
@@ -339,4 +376,8 @@ final class VmCollector {
     _closed = true;
     await _disconnect();
   }
+}
+
+extension on Stopwatch {
+  int elapsedMicrosecondsGetter() => elapsedMicroseconds;
 }

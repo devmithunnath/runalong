@@ -1,6 +1,7 @@
 .dart_tool/
 .runalong/
 artifacts/
+example/eCompliance Mobile/
 build/
 coverage/
 .git/
@@ -23,3 +24,6 @@ example/fixture/macos/Pods/
 
 **/__pycache__/
 **/*.pyc
+packages/**/.dart_tool/
+packages/**/build/
+packages/**/.flutter-plugins-dependencies

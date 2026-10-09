@@ -253,6 +253,24 @@ ArgParser _parser() {
         )
         ..addOption('workload', help: 'Stable journey identifier.')
         ..addOption(
+          'capture-mode',
+          allowed: ['measure', 'diagnose'],
+          help: 'Measure normally or collect instrumented diagnostic traces.',
+        )
+        ..addOption(
+          'runner-adapter',
+          allowed: ['none', 'dart-json'],
+          help: 'Read test boundaries from the runner JSON reporter.',
+        )
+        ..addOption(
+          'journey-events-file',
+          help: 'Fresh structured journey JSONL written by an external runner.',
+        )
+        ..addOption(
+          'source-root',
+          help: 'Optional matching app checkout for local source candidates.',
+        )
+        ..addOption(
           'refresh-rate',
           help: 'Explicit display refresh rate in Hz.',
         )
@@ -385,6 +403,16 @@ Future<RunOptions> _options(ArgResults args, String project) async {
         positiveNumber(args.option('refresh-rate'), 'refresh-rate') ??
         profile?.refreshRateHz,
     maxFrames: maxFrames,
+    captureMode:
+        args.option('capture-mode') ?? profile?.captureMode ?? 'measure',
+    runnerAdapter:
+        args.option('runner-adapter') ?? profile?.runnerAdapter ?? 'none',
+    journeyEventsFile: args.option('journey-events-file') == null
+        ? profile?.journeyEventsFile
+        : p.absolute(args.option('journey-events-file')!),
+    sourceRoot: args.option('source-root') == null
+        ? profile?.sourceRoot
+        : p.absolute(args.option('source-root')!),
     environment: environment,
     gates: gates,
   );
@@ -394,7 +422,7 @@ Future<JsonMap> _readReport(String directory) async {
   final value = jsonDecode(
     await File(p.join(directory, 'report.json')).readAsString(),
   );
-  if (value is! JsonMap || value['schemaVersion'] != 1) {
+  if (value is! JsonMap || ![1, 2].contains(value['schemaVersion'])) {
     throw const FormatException('Unsupported report schema.');
   }
   return value;

@@ -2,7 +2,7 @@
 
 A local catalogue app with a three-second animation and a list scroll. The intentional-jank switch adds 35 ms of busy CPU work while an animation frame is built. It is deliberately bad code used only to validate measurement.
 
-The fixture has **no dependency on runalong**. `integration_test/journey_test.dart` is an ordinary integration test. `reference_test.dart` reuses that journey and exports the fixture's independent frame recorder for validation.
+The fixture has no dependency on the external recorder. It includes the separate optional `runalong_context` helper, activated only by `--dart-define=RUNALONG_CONTEXT=true`. `integration_test/journey_test.dart` is an ordinary integration test. `reference_test.dart` reuses that journey and exports the fixture's independent frame recorder for validation.
 
 ## Prepare
 
@@ -58,3 +58,16 @@ runalong run --vm-service-uri 'YOUR_VM_SERVICE_URL' \
 The flow intentionally does not relaunch the app, so it uses the process the collector attached to. It assumes the home screen is visible. Reset to the home screen before repeating. The flow is supplied for validation; a physical-device Maestro run is pending.
 
 iOS signing is intentionally unconfigured. Choose your own development team locally when deploying to a physical iPhone.
+
+## Minimal external Android runner
+
+With the fixture already running on the selected emulator or device, this ordinary ADB script finds controls by their accessibility labels, opens the catalogue, starts the animation and verifies completion:
+
+```sh
+runalong run --capture-mode diagnose --vm-service-uri 'YOUR_VM_SERVICE_URL' \
+  --source-root . -- python3 tool/android_journey.py --device DEVICE_ID
+```
+
+Keep `adb` on PATH. The script has no Runalong dependency. Launch the app with `--dart-define=RUNALONG_CONTEXT=true` for named context and optionally `--dart-define=FIXTURE_JANK=true` for the deliberate workload. A standalone debug-app Android emulator run is verified; representative performance measurements still require physical-device profile builds.
+
+The fixture-only `ext.fixture.reference` service extension exports its bounded independent timing list for comparison without embedding validation instrumentation in real apps.

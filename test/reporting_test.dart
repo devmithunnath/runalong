@@ -274,7 +274,7 @@ void main() {
     });
 
     test('unknown schema cannot be compared as a supported report', () {
-      final future = measured()..['schemaVersion'] = 2;
+      final future = measured()..['schemaVersion'] = 3;
       final comparison = compareReports(measured(), future);
       expect(comparison['status'], 'inconclusive');
       expect(comparison['compatible'], false);
@@ -395,6 +395,48 @@ void main() {
     }
 
     test(
+      'written findings share evidence across JSON, HTML and CI summary',
+      () async {
+        final report = buildReport(
+          manifest(),
+          [sample(71, build: 50000)],
+          [
+            {
+              'kind': 'navigation',
+              'receivedAt': '2026-10-09T11:59:59Z',
+              'isolate': 'main',
+              'routeName': '/orders/[spoof](target)?private=value',
+              'arguments': {'token': 'not-for-export'},
+            },
+          ],
+        );
+        await writeReports(directory, report);
+        final saved =
+            jsonDecode(
+                  await File('${directory.path}/report.json').readAsString(),
+                )
+                as JsonMap;
+        final summary = await File(
+          '${directory.path}/summary.md',
+        ).readAsString();
+        final html = await File('${directory.path}/report.html').readAsString();
+        expect(saved['insights'], report['insights']);
+        expect(saved['navigation'][0]['isolate'], 'main');
+        expect(saved['insights']['findings'][0]['evidence']['firstFrame'], 71);
+        expect(summary, contains('**Observed:**'));
+        expect(summary, contains('**Try next:**'));
+        expect(
+          summary.indexOf('**Observed:**'),
+          lessThan(summary.indexOf('| Result |')),
+        );
+        expect(summary, contains(r'\[spoof\]\(target\)'));
+        expect(summary, isNot(contains('private=value')));
+        expect(html, isNot(contains('not-for-export')));
+        expect(html, isNot(contains('innerHTML')));
+      },
+    );
+
+    test(
       'CI summary explains partial capture gaps with bounded escaped text',
       () async {
         final source = manifest(status: 'partial');
@@ -424,6 +466,25 @@ void main() {
       },
     );
 
+    test(
+      'older report data gains findings when rendered without recollection',
+      () async {
+        final report = buildReport(manifest(), [sample(42, build: 40000)], []);
+        report.remove('insights');
+        await writeReports(directory, report);
+        final saved =
+            jsonDecode(
+                  await File('${directory.path}/report.json').readAsString(),
+                )
+                as JsonMap;
+        expect(saved['metrics'], report['metrics']);
+        expect(saved['frames'], report['frames']);
+        expect(saved['insights']['findings'], hasLength(1));
+        expect(saved['insights']['findings'][0]['evidence']['firstFrame'], 42);
+        expect(report.containsKey('insights'), isFalse);
+      },
+    );
+
     test('unfinalized manifest recovers frames as partial capture', () async {
       final source = manifest(status: 'unavailable');
       source['finishedAt'] = null;
@@ -441,7 +502,7 @@ void main() {
     test(
       'unsupported manifest schema fails clearly without overwriting artifacts',
       () async {
-        final source = manifest()..['schemaVersion'] = 2;
+        final source = manifest()..['schemaVersion'] = 3;
         await writeSource(source, [sample(0).toJson()]);
         await expectLater(
           regenerateReport(directory),
@@ -525,7 +586,7 @@ void main() {
     test('strips route payloads and safely embeds malicious labels', () async {
       final report = buildReport(
         manifest(),
-        [sample(0)],
+        [sample(0, build: 30000)],
         [
           {
             'kind': 'navigation',

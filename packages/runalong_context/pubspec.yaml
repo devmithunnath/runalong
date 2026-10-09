@@ -1,0 +1,13 @@
+name: runalong_context
+description: Optional, explicit screen and operation context for Runalong captures.
+version: 0.1.0
+publish_to: none
+environment:
+  sdk: '>=3.7.0 <4.0.0'
+  flutter: '>=3.29.0'
+dependencies:
+  flutter:
+    sdk: flutter
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
