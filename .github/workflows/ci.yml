@@ -1,0 +1,96 @@
+name: Checks
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dart:
+    name: Dart on ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: '3.11.4'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: dart pub get
+      - run: dart format --output=none --set-exit-if-changed bin lib test
+      - run: dart analyze
+      - run: dart test
+      - run: python tool/mcp_smoke.py
+      - name: Inspect package archive
+        if: runner.os == 'Linux'
+        run: python tool/check_package.py
+
+  fixture:
+    name: macOS profile fixture (diagnostic)
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.41.6'
+          channel: stable
+          cache: true
+      - name: Install local Runalong
+        run: |
+          dart pub get
+          dart pub global activate --source path .
+          echo "$HOME/.pub-cache/bin" >> "$GITHUB_PATH"
+      - name: Prepare fixture
+        working-directory: example/fixture
+        run: |
+          flutter pub get
+          dart format --output=none --set-exit-if-changed lib test integration_test test_driver
+          flutter analyze
+          flutter test test/widget_test.dart
+      - name: Run existing integration test with external capture
+        working-directory: example/fixture
+        run: |
+          runalong run --connect-timeout 180 --timeout 300 \
+            --environment github-macos --workload catalogue-v1 \
+            --output ../../artifacts/fixture \
+            -- flutter drive --profile --no-dds -d macos \
+              --driver=test_driver/integration_test.dart \
+              --target=integration_test/reference_test.dart
+      - name: Compare overlapping frames with fixture reference
+        run: |
+          python3 example/fixture/tool/compare_reference.py \
+            artifacts/fixture/*/report.json \
+            example/fixture/build/integration_response_data.json
+      - name: Add captured summaries
+        if: always()
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+          summaries = list(Path('artifacts/fixture').rglob('summary.md'))
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as output:
+              output.write('### macOS fixture\n\nDiagnostic collector validation; not a mobile performance baseline.\n\n')
+              if not summaries:
+                  output.write('No report summary was produced. Inspect job logs.\n')
+              for summary in summaries:
+                  output.write(summary.read_text())
+                  output.write('\n\n')
+          PY
+      - name: Preserve capture and reference evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-fixture-evidence
+          if-no-files-found: warn
+          path: |
+            artifacts/fixture/
+            example/fixture/build/integration_response_data.json

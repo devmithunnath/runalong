@@ -1,0 +1,11 @@
+.dart_tool/
+.packages
+.runalong/
+build/
+coverage/
+artifacts/
+*.iml
+.DS_Store
+example/**/.dart_tool/
+example/**/build/
+example/**/.flutter-plugins-dependencies

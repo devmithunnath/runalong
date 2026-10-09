@@ -1,0 +1,14 @@
+appId: dev.malludeveloper.runalongFixture
+---
+# Launch the profile build before this flow so the VM service is exposed.
+# Avoid launchApp here: restarting the app would invalidate its service URI.
+- assertVisible: Open catalogue
+- tapOn: Open catalogue
+- assertVisible: Catalogue
+- tapOn: Run animation
+- extendedWaitUntil:
+    visible: Animation complete
+    timeout: 15000
+- swipe:
+    direction: UP
+- assertVisible: Catalogue
