@@ -1,0 +1,9 @@
+include: package:lints/recommended.yaml
+analyzer:
+  exclude:
+    - example/**
+    - artifacts/**
+    - packages/** # Flutter companion is analyzed with its own SDK/package config.
+  language:
+    strict-casts: true
+    strict-inference: true
